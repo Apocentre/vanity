@@ -23,6 +23,7 @@ use {
 use std::{
     array,
     str::FromStr,
+    sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
 
@@ -228,7 +229,7 @@ pub fn deploy_with_max_program_len_with_seed(
     ]
 }
 
-pub async fn grind(mut args: GrindArgs) -> Option<String> {
+pub async fn grind(mut args: GrindArgs, exit: AtomicBool) -> Option<String> {
     maybe_update_num_cpus(&mut args.num_cpus);
     let prefix = get_validated_prefix(&args);
     let suffix = get_validated_suffix(&args);
@@ -260,6 +261,12 @@ pub async fn grind(mut args: GrindArgs) -> Option<String> {
 
                     let mut out = [0; 24];
                     for iteration in 0_u64.. {
+                        // Exit if a thread found a solution
+                        if exit.load(Ordering::SeqCst) {
+                            logfather::trace!("gpu thread {gpu_index} exiting");
+                            return;
+                        }
+
                         // Generate new seed for this gpu & iteration
                         let seed = new_gpu_seed(gpu_index, iteration);
                         let timer = Instant::now();
@@ -288,6 +295,7 @@ pub async fn grind(mut args: GrindArgs) -> Option<String> {
 
                         if out_str_target_check.starts_with(prefix) && out_str_target_check.ends_with(suffix) {
                             logfather::info!("out seed = {out:?} -> {}", core::str::from_utf8(&out[..16]).unwrap());
+                            exit.store(true, Ordering::SeqCst);
                             logfather::trace!("gpu thread {gpu_index} exiting");
                             return;
                         }
@@ -303,6 +311,10 @@ pub async fn grind(mut args: GrindArgs) -> Option<String> {
 
         let base_sha = Sha256::new().chain_update(args.base);
         loop {
+            if exit.load(Ordering::Acquire) {
+                return None;
+            }
+
             let mut seed_iter = rand::thread_rng().sample_iter(&Alphanumeric).take(16);
             let seed: [u8; 16] = array::from_fn(|_| seed_iter.next().unwrap());
 
@@ -328,6 +340,7 @@ pub async fn grind(mut args: GrindArgs) -> Option<String> {
                     ((count as f64 / time_secs) as u64).to_formatted_string(&Locale::en)
                 );
 
+                exit.store(true, Ordering::Release);
                 return Some(pubkey)
             }
         }
