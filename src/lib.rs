@@ -231,7 +231,7 @@ pub fn deploy_with_max_program_len_with_seed(
     ]
 }
 
-pub fn grind(mut args: GrindArgs) {
+pub async fn grind(mut args: GrindArgs) -> Option<String> {
     maybe_update_num_cpus(&mut args.num_cpus);
     let prefix = get_validated_prefix(&args);
     let suffix = get_validated_suffix(&args);
@@ -307,14 +307,14 @@ pub fn grind(mut args: GrindArgs) {
         })
         .collect();
 
-    (0..args.num_cpus).into_par_iter().for_each(|i| {
+    let pubkey_result = (0..args.num_cpus).into_par_iter().find_map_first(|i| {
         let timer = Instant::now();
         let mut count = 0_u64;
 
         let base_sha = Sha256::new().chain_update(args.base);
         loop {
             if EXIT.load(Ordering::Acquire) {
-                return;
+                return None;
             }
 
             let mut seed_iter = rand::thread_rng().sample_iter(&Alphanumeric).take(16);
@@ -343,10 +343,13 @@ pub fn grind(mut args: GrindArgs) {
                 );
 
                 EXIT.store(true, Ordering::Release);
-                break;
+                return Some(pubkey)
             }
         }
     });
+
+    // we know for sure we will find at least one pubkey
+    pubkey_result
 }
 
 fn get_validated_prefix(args: &GrindArgs) -> &'static str {
