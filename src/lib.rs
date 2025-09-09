@@ -229,7 +229,7 @@ pub fn deploy_with_max_program_len_with_seed(
     ]
 }
 
-pub async fn grind(mut args: GrindArgs, exit: AtomicBool) -> Option<String> {
+pub async fn grind(mut args: GrindArgs, exit: AtomicBool) -> Option<(String, String)> {
     maybe_update_num_cpus(&mut args.num_cpus);
     let prefix = get_validated_prefix(&args);
     let suffix = get_validated_suffix(&args);
@@ -305,14 +305,14 @@ pub async fn grind(mut args: GrindArgs, exit: AtomicBool) -> Option<String> {
         })
         .collect();
 
-    let pubkey_result = (0..args.num_cpus).into_par_iter().find_map_first(|i| {
+    let result = (0..args.num_cpus).into_par_iter().find_map_first(|i| {
         let timer = Instant::now();
         let mut count = 0_u64;
 
         let base_sha = Sha256::new().chain_update(args.base);
         loop {
             if exit.load(Ordering::Acquire) {
-                return None;
+                return None
             }
 
             let mut seed_iter = rand::thread_rng().sample_iter(&Alphanumeric).take(16);
@@ -331,23 +331,23 @@ pub async fn grind(mut args: GrindArgs, exit: AtomicBool) -> Option<String> {
 
             // Did cpu find target?
             if out_str_target_check.starts_with(prefix) && out_str_target_check.ends_with(suffix) {
+                let seeds_str = core::str::from_utf8(&seed).unwrap().to_string();
                 let time_secs = timer.elapsed().as_secs_f64();
                 logfather::info!(
                     "cpu {i} found target: {pubkey}; {seed:?} -> {} in {:.3}s; {} attempts; {} attempts per second",
-                    core::str::from_utf8(&seed).unwrap(),
+                    seeds_str,
                     time_secs,
                     count.to_formatted_string(&Locale::en),
                     ((count as f64 / time_secs) as u64).to_formatted_string(&Locale::en)
                 );
 
                 exit.store(true, Ordering::Release);
-                return Some(pubkey)
+                return Some((seeds_str, pubkey))
             }
         }
     });
 
-    // we know for sure we will find at least one pubkey
-    pubkey_result
+    result
 }
 
 fn get_validated_prefix(args: &GrindArgs) -> &'static str {
